@@ -1,7 +1,6 @@
 mod commands;
 mod db;
 
-use std::sync::Arc;
 use crate::db::CrossoverDb;
 use poise::serenity_prelude as serenity;
 use tokio::sync::Mutex;
@@ -23,8 +22,8 @@ async fn event_listener(
     match event {
         poise::Event::Ready { data_about_bot } => {
             info!("{} is connected!", data_about_bot.user.name)
-        },
-        poise::Event::GuildCreate {guild, is_new} => {
+        }
+        poise::Event::GuildCreate { guild, is_new: _ } => {
             let mut commands_builder = serenity::CreateApplicationCommands::default();
             let commands = &framework.options().commands;
             for command in commands {
@@ -37,30 +36,37 @@ async fn event_listener(
             }
             let commands_builder = serenity::json::Value::Array(commands_builder.0);
             info!("Registering {} commands...", commands.len());
-            ctx.http.create_guild_application_commands(guild.id.0, &commands_builder).await?;
-        },
-        poise::Event::Message {new_message} => {
+            ctx.http
+                .create_guild_application_commands(guild.id.0, &commands_builder)
+                .await?;
+        }
+        poise::Event::Message { new_message } => {
             if let Some(guild_id) = new_message.guild_id {
                 let db = user_data.db.lock().await;
-                if let Some(target) = db.get_crossover(guild_id, new_message.channel_id)? {
-                    target.send_message(ctx, |m| {
-                        m.embed(|mut e| {
-                            e.title(&format!("New post from {}", &new_message.author.name));
-                            e.description(&new_message.content);
-                            e.author(|mut a| {
-                                a.name(&new_message.author.name);
-                                if let Some(avatar) = &new_message.author.avatar_url() {
-                                    a.icon_url(avatar);
+                if let Some(target) = db
+                    .get_crossover(guild_id, new_message.channel_id)
+                    .unwrap_or(None)
+                {
+                    target
+                        .send_message(ctx, |m| {
+                            m.embed(|e| {
+                                e.title(&format!("New post from {}", &new_message.author.name));
+                                e.description(&new_message.content);
+                                e.author(|a| {
+                                    a.name(&new_message.author.name);
+                                    if let Some(avatar) = &new_message.author.avatar_url() {
+                                        a.icon_url(avatar);
+                                    }
+                                    a.url(&new_message.link());
+                                    a
+                                });
+                                if let Some(attachment) = &new_message.attachments.first() {
+                                    e.image(&attachment.url);
                                 }
-                                a.url(&new_message.link());
-                                a
-                            });
-                            for attachment in &new_message.attachments {
-                                e.attachment(&attachment.filename);
-                            }
-                            e
+                                e
+                            })
                         })
-                    }).await?;
+                        .await?;
                 }
             }
         }
@@ -69,7 +75,6 @@ async fn event_listener(
 
     Ok(())
 }
-
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     match error {
@@ -90,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     tracing_subscriber::fmt::init();
     let token = std::env::var("TOKEN")?;
-    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| String::from("db.mdb"));
+    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| String::from("crosses.db"));
     let db = CrossoverDb::new(&db_path)?;
 
     let options = poise::FrameworkOptions {

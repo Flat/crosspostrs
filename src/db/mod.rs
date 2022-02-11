@@ -1,16 +1,14 @@
 use anyhow::{Context, Result};
-use heed::{types::SerdeBincode, Database, Env, EnvOpenOptions};
+use bincode::{config, Decode, Encode};
 use poise::serenity_prelude::{ChannelId, GuildId};
-use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::path::Path;
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Encode, Decode, Debug)]
 pub struct Key {
-    guild: GuildId,
-    source: ChannelId,
+    guild: u64,
+    source: u64,
 }
 
 #[derive(Debug)]
@@ -25,32 +23,29 @@ impl fmt::Display for DbError {
 impl Error for DbError {}
 
 pub struct CrossoverDb {
-    pub env: Env,
-    pub db: Database<SerdeBincode<Key>, SerdeBincode<ChannelId>>,
+    pub db: sled::Db,
 }
 
 impl CrossoverDb {
     pub fn new(path: &str) -> Result<Self> {
         fs::create_dir_all(path).context("Failed to create db path.")?;
-        let env = EnvOpenOptions::new()
-            .max_dbs(3000)
-            .open(Path::new(path))
-            .map_err(|e| DbError(e.to_string()))?;
-        let db: Database<SerdeBincode<Key>, SerdeBincode<ChannelId>> = env
-            .create_database(Some("crossovers"))
-            .map_err(|e| DbError(e.to_string()))?;
-        Ok(CrossoverDb { env, db })
+        let db = sled::open(path).map_err(|e| DbError(e.to_string()))?;
+        Ok(CrossoverDb { db })
     }
 
     pub fn get_crossover(&self, guild: GuildId, source: ChannelId) -> Result<Option<ChannelId>> {
-        let key = Key { guild, source };
-        let rtxn = self.env.read_txn().map_err(|e| DbError(e.to_string()))?;
-        let ret = self
-            .db
-            .get(&rtxn, &key)
-            .map_err(|e| DbError(e.to_string()))?;
-        rtxn.commit().map_err(|e| DbError(e.to_string()))?;
-        Ok(ret)
+        let guild = guild.0;
+        let source = source.0;
+        let key: Vec<u8> = bincode::encode_to_vec(Key { guild, source }, config::standard())?;
+        let ret = bincode::decode_from_slice::<u64, _>(
+            &self
+                .db
+                .get(key)?
+                .ok_or_else(|| DbError("Unable to get from crossover from DB".to_string()))?[..],
+            config::standard(),
+        )?;
+        let ret = ChannelId(ret.0);
+        Ok(Some(ret))
     }
 
     pub fn put_crossover(
@@ -59,12 +54,12 @@ impl CrossoverDb {
         source: ChannelId,
         target: ChannelId,
     ) -> Result<()> {
-        let key = Key { guild, source };
-        let mut wtxn = self.env.write_txn().map_err(|e| DbError(e.to_string()))?;
+        let guild = guild.0;
+        let source = source.0;
+        let target = target.0;
+        let key: Vec<u8> = bincode::encode_to_vec(Key { guild, source }, config::standard())?;
         self.db
-            .put(&mut wtxn, &key, &target)
-            .map_err(|e| DbError(e.to_string()))?;
-        wtxn.commit().map_err(|e| DbError(e.to_string()))?;
+            .insert(key, bincode::encode_to_vec(target, config::standard())?)?;
         Ok(())
     }
 
@@ -72,27 +67,35 @@ impl CrossoverDb {
         &self,
         guild: GuildId,
         source: ChannelId,
-        target: ChannelId,
+        _target: ChannelId,
     ) -> Result<bool> {
-        let key = Key { guild, source };
-        let mut wtxn = self.env.write_txn().map_err(|e| DbError(e.to_string()))?;
-        let deleted = self
-            .db
-            .delete(&mut wtxn, &key)
-            .map_err(|e| DbError(e.to_string()))?;
-        wtxn.commit().map_err(|e| DbError(e.to_string()))?;
+        let guild = guild.0;
+        let source = source.0;
+        let key: Vec<u8> = bincode::encode_to_vec(Key { guild, source }, config::standard())?;
+        let deleted = self.db.remove(key)?.is_some();
         Ok(deleted)
     }
 
     pub fn get_all(&self, guild: GuildId) -> Result<Vec<(ChannelId, ChannelId)>> {
-        let rtxn = self.env.read_txn().map_err(|e| DbError(e.to_string()))?;
-        let ret = self.db.iter(&rtxn).map_err(|e| DbError(e.to_string()))?;
-        let list = ret
-            .filter_map(|res| res.ok())
-            .filter(|row| row.0.guild == guild)
-            .map(|(key, target)| (key.source, target))
+        let list: Vec<(ChannelId, ChannelId)> = self
+            .db
+            .iter()
+            .filter_map(|i| i.ok())
+            .map(|x| {
+                (
+                    bincode::decode_from_slice::<Key, _>(&x.0, config::standard())
+                        .unwrap()
+                        .0,
+                    ChannelId(
+                        bincode::decode_from_slice::<u64, _>(&x.1, config::standard())
+                            .unwrap()
+                            .0,
+                    ),
+                )
+            })
+            .filter(|(key, _value)| key.guild == guild.0)
+            .map(|(key, value)| (ChannelId(key.source), value))
             .collect();
-        rtxn.commit().map_err(|e| DbError(e.to_string()))?;
         Ok(list)
     }
 }
