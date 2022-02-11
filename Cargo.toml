@@ -1,0 +1,15 @@
+[package]
+name = "crosspostrs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+heed  = "0.11"
+dotenv = "0.15"
+serde = "1.0"
+tokio = {version = "1.16", features = ["full"]}
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-futures = "0.2"
+poise = { git = "https://github.com/kangalioo/poise", branch = "develop", features = ["collector"] }
