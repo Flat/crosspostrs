@@ -41,32 +41,34 @@ async fn event_listener(
                 .await?;
         }
         poise::Event::Message { new_message } => {
-            if let Some(guild_id) = new_message.guild_id {
-                let db = user_data.db.lock().await;
-                if let Some(target) = db
-                    .get_crossover(guild_id, new_message.channel_id)
-                    .unwrap_or(None)
-                {
-                    target
-                        .send_message(ctx, |m| {
-                            m.embed(|e| {
-                                e.title(&format!("New post from {}", &new_message.author.name));
-                                e.description(&new_message.content);
-                                e.author(|a| {
-                                    a.name(&new_message.author.name);
-                                    if let Some(avatar) = &new_message.author.avatar_url() {
-                                        a.icon_url(avatar);
+            if !&new_message.is_own(ctx) && !&new_message.author.bot {
+                if let Some(guild_id) = new_message.guild_id {
+                    let db = user_data.db.lock().await;
+                    if let Some(target) = db
+                        .get_crossover(guild_id, new_message.channel_id)
+                        .unwrap_or(None)
+                    {
+                        target
+                            .send_message(ctx, |m| {
+                                m.embed(|e| {
+                                    e.title(&format!("New post from {}", &new_message.author.name));
+                                    e.description(&new_message.content);
+                                    e.author(|a| {
+                                        a.name(&new_message.author.name);
+                                        if let Some(avatar) = &new_message.author.avatar_url() {
+                                            a.icon_url(avatar);
+                                        }
+                                        a.url(&new_message.link());
+                                        a
+                                    });
+                                    if let Some(attachment) = &new_message.attachments.first() {
+                                        e.image(&attachment.url);
                                     }
-                                    a.url(&new_message.link());
-                                    a
-                                });
-                                if let Some(attachment) = &new_message.attachments.first() {
-                                    e.image(&attachment.url);
-                                }
-                                e
+                                    e
+                                })
                             })
-                        })
-                        .await?;
+                            .await?;
+                    }
                 }
             }
         }
